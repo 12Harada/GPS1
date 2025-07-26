@@ -63,6 +63,58 @@
             font-size: 12px;
             color: white;
         }
+        .search-container {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f0f8ff;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        .search-row {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .search-input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .search-button {
+            padding: 8px 16px;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .search-button:hover {
+            background-color: #1d4ed8;
+        }
+        .clear-button {
+            padding: 8px 16px;
+            background-color: #6b7280;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .clear-button:hover {
+            background-color: #4b5563;
+        }
+        .search-result {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+        .highlight-marker {
+            border: 3px solid #ff6b35 !important;
+            box-shadow: 0 0 10px rgba(255, 107, 53, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -74,11 +126,27 @@
                 <label for="csvFile">CSVファイルを選択してください:</label>
                 <input type="file" id="csvFile" accept=".csv" />
                 <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                    形式: 7桁の数字,緯度,経度,GPS取得年月日時分(YYYYMMDDhhmm)
+                    形式: 7桁ID（数字のみ、または最初がアルファベット＋6桁数字）,緯度,経度,GPS取得年月日時分(YYYYMMDDhhmm)
                 </div>
             </div>
             <div class="info" id="fileInfo"></div>
             <div id="message"></div>
+            
+            <div class="search-container" id="searchContainer" style="display: none;">
+                <h3>検索機能</h3>
+                <div class="search-row">
+                    <label for="searchId">7桁ID:</label>
+                    <input type="text" id="searchId" class="search-input" placeholder="1234567 または A123456" maxlength="7" />
+                    <button onclick="searchById()" class="search-button">ID検索</button>
+                </div>
+                <div class="search-row">
+                    <label for="searchDate">取得日:</label>
+                    <input type="text" id="searchDate" class="search-input" placeholder="20240115 (YYYYMMDD)" maxlength="8" />
+                    <button onclick="searchByDate()" class="search-button">日付検索</button>
+                    <button onclick="clearSearch()" class="clear-button">検索解除</button>
+                </div>
+                <div class="search-result" id="searchResult"></div>
+            </div>
         </div>
         
         <div id="map"></div>
@@ -90,6 +158,8 @@
         var map;
         var markers = [];
         var pathLine = null;
+        var allData = [];
+        var highlightedMarkers = [];
 
         function initMap() {
             map = L.map('map').setView([35.6762, 139.6503], 10);
@@ -171,8 +241,8 @@
                 var lngStr = columns[2].replace(/"/g, '').trim();
                 var timestampStr = columns[3].replace(/"/g, '').trim();
                 
-                if (!/^\d{7}$/.test(id)) {
-                    throw new Error('行 ' + (i + 1) + ': ID "' + id + '" は7桁の数字である必要があります');
+                if (!/^[A-Za-z]\d{6}$|^\d{7}$/.test(id)) {
+                    throw new Error('行 ' + (i + 1) + ': ID "' + id + '" は7桁（数字のみ）または7文字（最初がアルファベット＋6桁数字）である必要があります');
                 }
                 
                 var lat = parseFloat(latStr);
@@ -209,11 +279,34 @@
             return data;
         }
 
+        function loadCSVData(data) {
+            if (data.length === 0) {
+                showMessage('データが見つかりませんでした', 'error');
+                return;
+            }
+            
+            allData = data.slice();
+            allData.sort(function(a, b) {
+                return a.timestamp - b.timestamp;
+            });
+            
+            showMessage(data.length + '件のCSVデータを読み込みました。検索してください。', 'success');
+            showFileInfo('読み込み完了: ' + data.length + '件のデータ（検索可能）');
+            
+            document.getElementById('searchContainer').style.display = 'block';
+        }
+
         function displayDataOnMap(data) {
             clearMarkers();
             
             if (data.length === 0) {
-                showMessage('データが見つかりませんでした', 'error');
+                showMessage('表示するデータがありません', 'error');
+                return;
+            }
+            
+            if (data.length > 200) {
+                showMessage('検索結果が200件を超えています（' + data.length + '件）。条件を絞り込んで再検索してください。', 'error');
+                document.getElementById('searchResult').textContent = '検索結果が多すぎます。条件を絞り込んでください（' + data.length + '件）';
                 return;
             }
             
@@ -245,6 +338,7 @@
                         '<strong>位置:</strong> ' + point.lat.toFixed(6) + ', ' + point.lng.toFixed(6)
                     );
                 
+                marker._pointData = point;
                 markers.push(marker);
                 bounds.extend([point.lat, point.lng]);
                 pathCoordinates.push([point.lat, point.lng]);
@@ -262,9 +356,6 @@
             if (data.length > 0) {
                 map.fitBounds(bounds, { padding: [20, 20] });
             }
-            
-            showMessage(data.length + '件のGPS位置情報を時刻順で地図上に表示しました', 'success');
-            showFileInfo('処理完了: ' + data.length + '件のデータポイント（時刻順）');
         }
 
         function showMessage(message, type) {
@@ -292,7 +383,7 @@
                 try {
                     var csvText = e.target.result;
                     var data = parseCSV(csvText);
-                    displayDataOnMap(data);
+                    loadCSVData(data);
                 } catch (error) {
                     showMessage('エラー: ' + error.message, 'error');
                     document.getElementById('fileInfo').style.display = 'none';
@@ -307,9 +398,133 @@
             reader.readAsText(file, 'UTF-8');
         }
 
+        function clearHighlight() {
+            highlightedMarkers.forEach(function(marker) {
+                var element = marker.getElement();
+                if (element) {
+                    element.classList.remove('highlight-marker');
+                }
+            });
+            highlightedMarkers = [];
+        }
+
+        function highlightMarkers(matchedData) {
+            clearHighlight();
+            
+            markers.forEach(function(marker) {
+                var pointData = marker._pointData;
+                var isMatched = matchedData.some(function(data) {
+                    return data.id === pointData.id && 
+                           data.timestamp.getTime() === pointData.timestamp.getTime();
+                });
+                
+                if (isMatched) {
+                    var element = marker.getElement();
+                    if (element) {
+                        element.classList.add('highlight-marker');
+                        highlightedMarkers.push(marker);
+                    }
+                }
+            });
+        }
+
+        function searchById() {
+            var searchId = document.getElementById('searchId').value.trim();
+            var resultDiv = document.getElementById('searchResult');
+            
+            if (!searchId) {
+                resultDiv.textContent = 'IDを入力してください';
+                return;
+            }
+            
+            if (!/^[A-Za-z]\d{6}$|^\d{7}$/.test(searchId)) {
+                resultDiv.textContent = '7桁の数字、または最初がアルファベット＋6桁数字を入力してください';
+                return;
+            }
+            
+            var matchedData = allData.filter(function(point) {
+                return point.id === searchId;
+            });
+            
+            if (matchedData.length === 0) {
+                resultDiv.textContent = 'ID "' + searchId + '" が見つかりませんでした';
+                clearMarkers();
+            } else if (matchedData.length > 200) {
+                resultDiv.textContent = 'ID "' + searchId + '" の検索結果が200件を超えています（' + matchedData.length + '件）。条件を絞り込んでください';
+                clearMarkers();
+            } else {
+                resultDiv.textContent = 'ID "' + searchId + '" で ' + matchedData.length + ' 件見つかりました';
+                displayDataOnMap(matchedData);
+                
+                if (matchedData.length === 1) {
+                    map.setView([matchedData[0].lat, matchedData[0].lng], 15);
+                }
+            }
+        }
+
+        function searchByDate() {
+            var searchDate = document.getElementById('searchDate').value.trim();
+            var resultDiv = document.getElementById('searchResult');
+            
+            if (!searchDate) {
+                resultDiv.textContent = '日付を入力してください';
+                return;
+            }
+            
+            if (!/^\d{8}$/.test(searchDate)) {
+                resultDiv.textContent = 'YYYYMMDD形式で入力してください（例: 20240115）';
+                return;
+            }
+            
+            var matchedData = allData.filter(function(point) {
+                var timestampStr = point.timestamp.getFullYear().toString() +
+                    ('0' + (point.timestamp.getMonth() + 1)).slice(-2) +
+                    ('0' + point.timestamp.getDate()).slice(-2);
+                return timestampStr === searchDate;
+            });
+            
+            if (matchedData.length === 0) {
+                resultDiv.textContent = '日付 "' + searchDate + '" のデータが見つかりませんでした';
+                clearMarkers();
+            } else if (matchedData.length > 200) {
+                resultDiv.textContent = '日付 "' + searchDate + '" の検索結果が200件を超えています（' + matchedData.length + '件）。条件を絞り込んでください';
+                clearMarkers();
+            } else {
+                resultDiv.textContent = '日付 "' + searchDate + '" で ' + matchedData.length + ' 件見つかりました';
+                displayDataOnMap(matchedData);
+                
+                if (matchedData.length > 0) {
+                    var bounds = L.latLngBounds();
+                    matchedData.forEach(function(point) {
+                        bounds.extend([point.lat, point.lng]);
+                    });
+                    map.fitBounds(bounds, { padding: [20, 20] });
+                }
+            }
+        }
+
+        function clearSearch() {
+            document.getElementById('searchId').value = '';
+            document.getElementById('searchDate').value = '';
+            document.getElementById('searchResult').textContent = '';
+            clearMarkers();
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
             document.getElementById('csvFile').addEventListener('change', handleFileSelect);
+            
+            document.getElementById('searchId').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchById();
+                }
+            });
+            
+            document.getElementById('searchDate').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchByDate();
+                }
+            });
         });
     //]]>
     </script>
